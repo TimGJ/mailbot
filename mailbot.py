@@ -1,10 +1,13 @@
-
+#!/usr/bin/python
 # -*- coding: utf-8 -*-
 """
 Created on Thu Jun 22 20:02:33 2017
 @author: Tim Greening-Jackson
-Simplistic mailbot to demonstrate collection and processing
-of e-mail
+
+Simple mailbot. Collects new mail from a particular IMAP mailserver using a
+particular set or credentials. Stores new mail in a database. 
+
+Doesn't yet deal with attachments.
 
 """
 
@@ -15,6 +18,9 @@ import email
 import time
 import getpass
 import pymysql
+import re
+
+Version = "1.0"
 
 class Message:
     """
@@ -34,7 +40,8 @@ class Message:
             elif self.message['Content-Type'].startswith('multipart/mixed;'):
                 self.multipart = True
             else:
-                logging.warning('Message UID={} has unknown content type {}'.format(self.imapuid, self.message['Content-Type']))
+                logging.warning('Message UID={} has unknown content type {}'.format(
+                        self.imapuid, self.message['Content-Type']))
         except KeyError:
             logging.warning('Message UID={} has no content type'.format(self.imapuid))
             
@@ -72,12 +79,27 @@ class Message:
                 self.date, self.subject)
         
 
+def StarPass(p):
+    """
+    Returns starred form of password p, showing the first and last characters
+    with the others replaced by *. So password "swordfish" would return
+    "s*******h"
+    """
+    if type(p) is not str:
+        logging.warning("Can't interpret password {}".format(p))
+        return
+    elif len(p) < 3:
+        return p
+    else:
+        return p[0] + (len(p)-2)*'*' + p[-1]
+
 def ProcessArguments():
     """
     Process the command line arguments returning an argparse namepsace
     or None if the parse didn't work.
     """
     parser = argparse.ArgumentParser(description='Proof of concept mailbot')
+    parser.add_argument('--logfile',      help='Log file name')
     parser.add_argument('--folder',       help='Folder name', default='Inbox')
     parser.add_argument('--checkall',     help='Process all mails rather than just new ones', action='store_true')
     parser.add_argument('--reply',        help='Automatically reply to incoming e-mail', action='store_true')
@@ -102,17 +124,35 @@ def GetMessages(args):
     Each message it encounters is converted to a Message object and appended
     to a list, which is returned.
     """
-    mail = imaplib.IMAP4_SSL(args.mailserver)
+    try:
+        mail = imaplib.IMAP4_SSL(args.mailserver)
+    except BaseException as e:
+        logging.error("{}".format(str(e)))
+        if re.search('11004|getaddrinfo', str(e)):
+            logging.error('Is host {} reachable?'.format(args.mailserver))
+        return
+        
     logging.debug('Connecting as {} to {}'.format(args.address, args.mailserver))
-    mail.login(args.address, args.mailpassword)
-
+    try:
+        mail.login(args.address, args.mailpassword)
+    except imaplib.IMAP4.error as e:
+        logging.error("{}".format(str(e)))
+        if re.search('AUTHENTICATIONFAILED', str(e)):
+            logging.error('Can user {} connect with pasword {}?'.format(args.address, 
+                          StarPass(args.mailpassword)))
+        return
+        
     mail.select(args.folder) # connect to inbox.
 
     messages = []
-    if args.checkall:
-        result, uidstring = mail.search(None, "ALL")
-    else:
-        result, uidstring = mail.search(None, "(UNSEEN)")
+    try:
+        result, uidstring = mail.search(None, "ALL" if args.checkall else "(UNSEEN)")
+    except imaplib.IMAP4.error as e:
+        logging.error("{}".format(str(e)))
+        if re.search('SEARCH illegal in state AUTH', str(e)):
+            logging.error('Does folder {} exist?'.format(args.folder))
+        return
+
     if result == 'OK':
         uids = uidstring[0].split()
         logging.debug("Got {} UIDs".format(len(uids)))
@@ -252,20 +292,32 @@ def ProcessMessages(messages, args):
     in the same session from the same user we commit after processing each
     message...
     """
-    cnx = pymysql.connect(host=args.dbserver, user=args.dbuser, 
-                          password=args.dbpassword, database=args.dbname)
-    cursor = cnx.cursor()
-    for message in messages:
-        ProcessMessage(message, cursor)
-        cnx.commit()
-    cursor.close()
-    cnx.close()
+    try:
+        cnx = pymysql.connect(host=args.dbserver, user=args.dbuser, 
+                              password=args.dbpassword, database=args.dbname)
+    except pymysql.err.OperationalError as e:
+        logging.error("MySQL Error: {}".format(str(e)))
+        if re.search('1045|Access denied', str(e)):
+            logging.error('Is password {} correct for {}@{}?'.format(
+                    StarPass(args.dbpassword), args.dbuser, args.dbserver))
+        if re.search('2003|Can''t connect to MySQL server', str(e)):
+            logging.error('Is MySQL reachable at port 3306 on {}?'.format(
+                    args.dbserver))
+    else:
+        cursor = cnx.cursor()
+        for message in messages:
+            ProcessMessage(message, cursor)
+            cnx.commit()
+        cursor.close()
+        cnx.close()
 
 if __name__ == '__main__':
 
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s:%(levelname)s:%(message)s')
+    logging.basicConfig(level=logging.DEBUG, 
+                        format='%(asctime)s:%(levelname)s:%(message)s')
+    logging.info('Mailbot version {} started'.format(Version))
     args = ProcessArguments()
-    
+
     if not args.mailpassword:
         args.mailpassword = getpass.getpass('Mail password: ')
     if not args.dbpassword:
@@ -275,7 +327,8 @@ if __name__ == '__main__':
 
     while True:
         messages = GetMessages(args)
-        ProcessMessages(messages, args)
+        if messages:
+            ProcessMessages(messages, args)
         if args.interval:
             time.sleep(args.interval)
         else:
