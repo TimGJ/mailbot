@@ -99,19 +99,18 @@ def ProcessArguments():
     or None if the parse didn't work.
     """
     parser = argparse.ArgumentParser(description='Proof of concept mailbot')
-    parser.add_argument('--logfile',      help='Log file name')
     parser.add_argument('--folder',       help='Folder name', default='Inbox')
     parser.add_argument('--checkall',     help='Process all mails rather than just new ones', action='store_true')
     parser.add_argument('--reply',        help='Automatically reply to incoming e-mail', action='store_true')
     parser.add_argument('--interval',     help='Seconds between e-mail checks (only runs once if ommitted)', type=int)
     parser.add_argument('--verbose',      help='Verbose output', action='store_true')
     parser.add_argument('--mailpassword', help='Mail password (prompts if blank)')
+    parser.add_argument('--dbuser',       help='Database username', default='mailbot')
     parser.add_argument('--dbpassword',   help='Database passsword (prompts if blank)')
+    parser.add_argument('--dbname',       help='Database name', default = 'asterisk')
+    parser.add_argument('--mailserver',   help='IMAP server', default = 'mail.lcn.com')
     parser.add_argument('address',        help='E-mail address')
-    parser.add_argument('mailserver',     help='IMAP server')
-    parser.add_argument('dbserver',       help='Database server')
-    parser.add_argument('dbuser',         help='Database username')
-    parser.add_argument('dbname',         help='Database name')
+    parser.add_argument('dbserver',       help='Database server IP address/hostname')
 
     return parser.parse_args()
 
@@ -313,10 +312,10 @@ def ProcessMessages(messages, args):
 
 if __name__ == '__main__':
 
-    logging.basicConfig(level=logging.DEBUG, 
+    args = ProcessArguments()
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, 
                         format='%(asctime)s:%(levelname)s:%(message)s')
     logging.info('Mailbot version {} started'.format(Version))
-    args = ProcessArguments()
 
     if not args.mailpassword:
         args.mailpassword = getpass.getpass('Mail password: ')
@@ -325,13 +324,15 @@ if __name__ == '__main__':
 
     # Get the mail headers
 
-    while True:
-        messages = GetMessages(args)
-        if messages:
-            ProcessMessages(messages, args)
-        if args.interval:
-            time.sleep(args.interval)
-        else:
-            logging.debug("No repeat interval specified. Exiting")
-            break
-
+    try:
+        while True:
+            messages = GetMessages(args)
+            if messages:
+                ProcessMessages(messages, args)
+            if args.interval:
+                time.sleep(args.interval)
+            else:
+                logging.info("No repeat interval specified. Exiting")
+                break
+    except KeyboardInterrupt:
+        logging.info('Bye!')
