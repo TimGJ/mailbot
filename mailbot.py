@@ -161,39 +161,6 @@ def GetMessages(args):
     return messages
 
 
-def GenerateVicidialEmailListSQL(message, lead_id, group):
-    """
-    Returns a suitably formed SQL query for insertion of a message in to the
-    vicidial_email_list table. Separated out for tidiness and readability.
-    """
-    
-    # Get the payload and strip various naughty charaqcters from it
-    # as they might break the SQL insertion
-        
-    sql = """
-        insert into `vicidial_email_list` (
-                `lead_id`, 
-                `protocol`, 
-                `email_date`, 
-                `email_to`, 
-                `email_from`, 
-                `email_from_name`, 
-                `subject`, 
-                `mime_type`, 
-                `content_type`, 
-                `content_transfer_encoding`, 
-                `x_mailer`, 
-                `sender_ip`, 
-                `message`, 
-                `email_account_id`, 
-                `group_id`, 
-                `status`, 
-                `direction`)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
-                %s, %s, %s, %s, %s, %s, %s) """
-   
-    return sql
-
 def ProcessMessage(message, cursor):
     """
     Processes an individual message.
@@ -259,23 +226,23 @@ def ProcessMessage(message, cursor):
 
     sql = GenerateVicidialEmailListSQL(message, lead_id, group)    
     try:
-        cursor.execute(sql,[lead_id, 
-        "IMAP",
-        message.date.strftime('%Y-%m-%d %H:%M:%S'), 
-        message.message['to'],
-        message.fromaddress, 
-        message.fromname, 
-        message.subject, 
-        message.message['mime-type'], 
-        message.message['content-type'].split(';')[0], 
-        message.message['content-transfer-encoding'],
-        message.message['x-mailer'],
-        message.message['sender-ip'], 
-        payload,
-        "MAILBOT", 
-        group, 
-        "NEW",
-        "INBOUND"])
+        cursor.execute("""insert into `vicidial_email_list` (
+                `lead_id`, `protocol`, `email_date`, `email_to`, 
+                `email_from`, `email_from_name`, `subject`, `mime_type`, 
+                `content_type`, `content_transfer_encoding`, `x_mailer`, 
+                `sender_ip`, `message`, `email_account_id`, `group_id`, 
+                `status`, `direction`) values (%s, %s, %s, %s, 
+                %s, %s, %s, %s, %s, %s,  %s, %s, %s, %s, %s, %s, %s) """
+                ,(lead_id, 
+                "IMAP",
+                message.date.strftime('%Y-%m-%d %H:%M:%S'), 
+                message.message['to'], message.fromaddress, 
+                message.fromname, message.subject, 
+                message.message['mime-type'], 
+                message.message['content-type'].split(';')[0], 
+                message.message['content-transfer-encoding'],
+                message.message['x-mailer'], message.message['sender-ip'], 
+                payload, "MAILBOT", group, "NEW", "INBOUND"))
     except pymysql.err.ProgrammingError as e:
         logging.error('Error: {}'.format(e))
         logging.error(cursor._last_executed)
