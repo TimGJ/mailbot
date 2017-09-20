@@ -19,8 +19,7 @@ import time
 import getpass
 import pymysql
 import re
-
-Version = "1.0"
+import git
 
 class Message:
     """
@@ -45,9 +44,6 @@ class Message:
         except KeyError:
             logging.warning('Message UID={} has no content type'.format(self.imapuid))
             
-        for k in self.message.keys():
-            logging.debug('message[{}]: {}'.format(k, self.message[k]))
-
         if type(self.message['To']) is str:
             todetails = email.utils.getaddresses(self.message['To'].split(","))[0]
             self.toname, self.toaddress = todetails[0], todetails[1]
@@ -173,52 +169,29 @@ def GenerateVicidialEmailListSQL(message, lead_id, group):
     
     # Get the payload and strip various naughty charaqcters from it
     # as they might break the SQL insertion
-    try:
-        payload = message.message.get_payload()[0].get_payload().replace('"','""')
-    except AttributeError:
-        payload = '*** NO MESSAGE CONTENT ***' 
         
     sql = """
-        insert into vicidial_email_list (
-                lead_id, 
-                protocol, 
-                email_date, 
-                email_to, 
-                email_from, 
-                email_from_name, 
-                subject, 
-                mime_type, 
-                content_type, 
-                content_transfer_encoding, 
-                x_mailer, 
-                sender_ip, 
-                message, 
-                email_account_id, 
-                group_id, 
-                status, 
-                direction)
-        values ({}, "{}", "{}", "{}", "{}", "{}", "{}", "{}", "{}", "{}", 
-                "{}", "{}", "{}", "{}", "{}", "{}", "{}")
-        """.format(
-    lead_id, 
-    "IMAP",
-    message.date.strftime('%Y-%m-%d %H:%M:%S'), 
-    message.message['to'].replace('"',''),
-    message.fromaddress.replace('"',''), 
-    message.fromname.replace('"',''), 
-    message.subject.replace('"',''), 
-    message.message['mime-type'], 
-    message.message['content-type'].split(';')[0], 
-    message.message['content-transfer-encoding'],
-    message.message['x-mailer'],
-    message.message['sender-ip'], 
-    payload,
-    "MAILBOT", 
-    group, 
-    "NEW",
-    "INBOUND"
-    )
-        
+        insert into `vicidial_email_list` (
+                `lead_id`, 
+                `protocol`, 
+                `email_date`, 
+                `email_to`, 
+                `email_from`, 
+                `email_from_name`, 
+                `subject`, 
+                `mime_type`, 
+                `content_type`, 
+                `content_transfer_encoding`, 
+                `x_mailer`, 
+                `sender_ip`, 
+                `message`, 
+                `email_account_id`, 
+                `group_id`, 
+                `status`, 
+                `direction`)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
+                %s, %s, %s, %s, %s, %s, %s) """
+   
     return sql
 
 def ProcessMessage(message, cursor):
@@ -229,9 +202,14 @@ def ProcessMessage(message, cursor):
     If it does retrives the lead ID, otherwise generates a new one
     """
     logging.debug("Message from {}".format(message.fromaddress))
+
+    try:    
+        cursor.execute("select lead_id, title, first_name, last_name from vicidial_list where email = %s", 
+                   (message.fromaddress))
+    except pymysql.err.ProgrammingError as e:
+        logging.error('Error: {}'.format(e))
+        logging.error(cursor._last_executed)
     
-    sql = "select lead_id, title, first_name, last_name from vicidial_list where email = '{}'".format(message.fromaddress)
-    cursor.execute(sql)
     result = cursor.fetchone()
     if result:
         logging.debug('Matched ID {} to {}'.format(result[0], message.fromaddress))
@@ -248,21 +226,23 @@ def ProcessMessage(message, cursor):
             last_name = " ".join(parts[1:]).replace("'", "''")
         except IndexError:
             last_name = "UNKNOWN"
-            
-        sql = "insert into vicidial_list (email, first_name, last_name) values ('{}', '{}', '{}')".format(
-                message.fromaddress, first_name, last_name)
-        logging.debug(sql)
-        cursor.execute(sql)
+
+        try:
+            cursor.execute("insert into vicidial_list (email, first_name, last_name) values (%s, %s, %s)",
+                           (message.fromaddress, first_name, last_name))
+        except pymysql.err.ProgrammingError as e:
+            logging.error('Error: {}'.format(e))
+            logging.error(cursor._last_executed)
+
         cursor.execute('SELECT LAST_INSERT_ID()')
         lead_id = cursor.fetchone()[0]
         logging.debug('Created leadid {} for {}'.format(lead_id, message.fromaddress))
 
     # Get inbound group based on incoming e-mail maddress.
     
-    sql = "select group_id from vicidial_inbound_groups where email = '{}'".format(message.toaddress)
-    logging.debug(sql)
+    cursor.execute("select group_id from vicidial_inbound_groups where email = %s", 
+                   (message.toaddress))
     
-    cursor.execute(sql)
     result = cursor.fetchone()
     group = result[0] if result else "Unknown"
 
@@ -271,13 +251,36 @@ def ProcessMessage(message, cursor):
     # e-mail message. We need to populate several fields, some of which
     # may not be present in the message.
     # Variable names are those of the corresponding columns
-    
-    sql = GenerateVicidialEmailListSQL(message, lead_id, group)    
-    logging.debug(sql)
-    cursor.execute(sql)
-    
-    
 
+    try:
+        payload = message.message.get_payload()[0].get_payload().replace('"','""')
+    except AttributeError:
+        payload = '*** NO MESSAGE CONTENT ***' 
+
+    sql = GenerateVicidialEmailListSQL(message, lead_id, group)    
+    try:
+        cursor.execute(sql,[lead_id, 
+        "IMAP",
+        message.date.strftime('%Y-%m-%d %H:%M:%S'), 
+        message.message['to'],
+        message.fromaddress, 
+        message.fromname, 
+        message.subject, 
+        message.message['mime-type'], 
+        message.message['content-type'].split(';')[0], 
+        message.message['content-transfer-encoding'],
+        message.message['x-mailer'],
+        message.message['sender-ip'], 
+        payload,
+        "MAILBOT", 
+        group, 
+        "NEW",
+        "INBOUND"])
+    except pymysql.err.ProgrammingError as e:
+        logging.error('Error: {}'.format(e))
+        logging.error(cursor._last_executed)
+
+    
 def ProcessMessages(messages, args):
     """
     Adds details of the downloaded mail messages.
@@ -315,7 +318,10 @@ if __name__ == '__main__':
     args = ProcessArguments()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, 
                         format='%(asctime)s:%(levelname)s:%(message)s')
-    logging.info('Mailbot version {} started'.format(Version))
+    repo = git.Repo()
+    sha = repo.head.object.hexsha[-6:]
+    tag = repo.tags[-1] if repo.tags else '** UNKNOWN **'
+    logging.info('Mailbot tag {}  (hexsha {}) started'.format(tag, sha))
 
     if not args.mailpassword:
         args.mailpassword = getpass.getpass('Mail password: ')
