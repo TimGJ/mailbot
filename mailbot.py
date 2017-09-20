@@ -286,8 +286,7 @@ if __name__ == '__main__':
                         format='%(asctime)s:%(levelname)s:%(message)s')
     repo = git.Repo()
     sha = repo.head.object.hexsha[-6:]
-    tag = repo.tags[-1] if repo.tags else ''
-    logging.info('Mailbot {}  (SHA {}) started'.format(tag, sha))
+    logging.info('Mailbot (SHA {}) started'.format(sha))
 
     if not args.mailpassword:
         args.mailpassword = getpass.getpass('Mail password: ')
