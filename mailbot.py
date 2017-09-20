@@ -97,7 +97,6 @@ def ProcessArguments():
     parser = argparse.ArgumentParser(description='Proof of concept mailbot')
     parser.add_argument('--folder',       help='Folder name', default='Inbox')
     parser.add_argument('--checkall',     help='Process all mails rather than just new ones', action='store_true')
-    parser.add_argument('--reply',        help='Automatically reply to incoming e-mail', action='store_true')
     parser.add_argument('--interval',     help='Seconds between e-mail checks (only runs once if ommitted)', type=int)
     parser.add_argument('--verbose',      help='Verbose output', action='store_true')
     parser.add_argument('--mailpassword', help='Mail password (prompts if blank)')
