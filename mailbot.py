@@ -21,6 +21,8 @@ import pymysql
 import re
 import git
 import sys
+import errno
+from socket import error as socket_error
 
 class Message:
     """
@@ -95,6 +97,14 @@ def ProcessArguments():
     Process the command line arguments returning an argparse namepsace
     or None if the parse didn't work.
     """
+    repo = git.Repo()
+    try:
+        ver = repo.git.describe()
+    except git.exc.GitCommandError:
+        ver = None
+    description = 'Connex Mailbot'
+    if ver:
+        description += ' v. {}'.format(ver)
     parser = argparse.ArgumentParser(description='Proof of concept mailbot')
     parser.add_argument('--folder',       help='Folder name', default='Inbox')
     parser.add_argument('--checkall',     help='Process all mails rather than just new ones', action='store_true')
@@ -121,44 +131,50 @@ def GetMessages(args):
     """
     try:
         mail = imaplib.IMAP4_SSL(args.mailserver)
-    except BaseException as e:
+    except imaplib.IMAP4.error as e:
         logging.error("{}".format(str(e)))
         if re.search('11004|getaddrinfo', str(e)):
             logging.error('Is host {} reachable?'.format(args.mailserver))
         return
-        
-    logging.debug('Connecting as {} to {}'.format(args.address, args.mailserver))
-    try:
-        mail.login(args.address, args.mailpassword)
-    except imaplib.IMAP4.error as e:
-        logging.error("{}".format(str(e)))
-        if re.search('AUTHENTICATIONFAILED', str(e)):
-            logging.error('Can user {} connect with pasword {}?'.format(args.address, 
-                          StarPass(args.mailpassword)))
-        return
-        
-    mail.select(args.folder) # connect to inbox.
+    except socket_error as serr:
+        if serr.errno != errno.ECONNREFUSED:
+            logging.error('Socket error: {}'.format(serr))
+            raise serr
+        else:
+            logging.error('Connection refused. Broken firewall/proxy?: {}'.format(serr))
+    else:
+        logging.debug('Connecting as {} to {}'.format(args.address, args.mailserver))
+        try:
+            mail.login(args.address, args.mailpassword)
+        except imaplib.IMAP4.error as e:
+            logging.error("{}".format(str(e)))
+            if re.search('AUTHENTICATIONFAILED', str(e)):
+                logging.error('Can user {} connect with pasword {}?'.format(args.address,
+                              StarPass(args.mailpassword)))
+            return
 
-    messages = []
-    try:
-        result, uidstring = mail.search(None, "ALL" if args.checkall else "(UNSEEN)")
-    except imaplib.IMAP4.error as e:
-        logging.error("{}".format(str(e)))
-        if re.search('SEARCH illegal in state AUTH', str(e)):
-            logging.error('Does folder {} exist?'.format(args.folder))
-        return
+        mail.select(args.folder) # connect to inbox.
 
-    if result == 'OK':
-        uids = uidstring[0].split()
-        logging.debug("Got {} UIDs".format(len(uids)))
-        for i, uid in enumerate(uids):
-            result, data = mail.fetch(uid,"(RFC822 BODY[TEXT])")
-            if result == 'OK':
-                messages.append(Message(data, uid))
-            else:
-                logging.debug("Failed to fetch UID {}".format(uid))
-    mail.close()
-    return messages
+        messages = []
+        try:
+            result, uidstring = mail.search(None, "ALL" if args.checkall else "(UNSEEN)")
+        except imaplib.IMAP4.error as e:
+            logging.error("{}".format(str(e)))
+            if re.search('SEARCH illegal in state AUTH', str(e)):
+                logging.error('Does folder {} exist?'.format(args.folder))
+            return
+
+        if result == 'OK':
+            uids = uidstring[0].split()
+            logging.debug("Got {} UIDs".format(len(uids)))
+            for i, uid in enumerate(uids):
+                result, data = mail.fetch(uid,"(RFC822 BODY[TEXT])")
+                if result == 'OK':
+                    messages.append(Message(data, uid))
+                else:
+                    logging.debug("Failed to fetch UID {}".format(uid))
+        mail.close()
+        return messages
 
 
 def ProcessMessage(message, cursor):
