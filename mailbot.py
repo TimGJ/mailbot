@@ -105,7 +105,7 @@ def ProcessArguments():
     description = 'Connex Mailbot'
     if ver:
         description += ' v. {}'.format(ver)
-    parser = argparse.ArgumentParser(description='Proof of concept mailbot')
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument('--folder',       help='Folder name', default='Inbox')
     parser.add_argument('--checkall',     help='Process all mails rather than just new ones', action='store_true')
     parser.add_argument('--interval',     help='Seconds between e-mail checks (only runs once if ommitted)', type=int)
@@ -141,7 +141,7 @@ def GetMessages(args):
             logging.error('Socket error: {}'.format(serr))
             raise serr
         else:
-            logging.error('Connection refused. Broken firewall/proxy?: {}'.format(serr))
+            logging.error('Connection refused. Broken firewall/proxy? Call Reece!: {}'.format(serr))
     else:
         logging.debug('Connecting as {} to {}'.format(args.address, args.mailserver))
         try:
