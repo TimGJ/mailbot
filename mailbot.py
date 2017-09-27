@@ -20,6 +20,7 @@ import getpass
 import pymysql
 import re
 import git
+import sys
 
 class Message:
     """
@@ -285,8 +286,12 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, 
                         format='%(asctime)s:%(levelname)s:%(message)s')
     repo = git.Repo()
-    sha = repo.head.object.hexsha[-6:]
-    logging.info('Mailbot (SHA {}) started'.format(sha))
+    try:
+        ver = repo.git.describe()
+    except git.exc.GitCommandError:
+        ver = "** NO GIT TAG DEFINED **"
+    logging.info('{} Info: {}'.format(sys.executable, sys.version))
+    logging.info('{} Ver. {}'.format(__file__, ver))
 
     if not args.mailpassword:
         args.mailpassword = getpass.getpass('Mail password: ')
