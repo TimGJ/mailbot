@@ -106,17 +106,23 @@ def ProcessArguments():
     if ver:
         description += ' v. {}'.format(ver)
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument('--folder',       help='Folder name', default='Inbox')
-    parser.add_argument('--checkall',     help='Process all mails rather than just new ones', action='store_true')
-    parser.add_argument('--interval',     help='Seconds between e-mail checks (only runs once if ommitted)', type=int)
+
+    emlgrp = parser.add_argument_group('E-mail', 'E-mail collection options')
+    emlgrp.add_argument('--mailfolder',   help='Folder name', default='Inbox')
+    emlgrp.add_argument('--mailpassword', help='Mail password (prompts if blank)')
+    emlgrp.add_argument('--mailserver',   help='IMAP server', default = 'mail.lcn.com')
+    emlgrp.add_argument('mailaddress',    help='E-mail address')
+
+    mexgrp = parser.add_mutually_exclusive_group()
+    mexgrp.add_argument('--checkall',     help='Process all mails rather than just new ones', action='store_true')
+    mexgrp.add_argument('--interval',     help='Seconds between e-mail checks (only runs once if ommitted)', type=int)
     parser.add_argument('--verbose',      help='Verbose output', action='store_true')
-    parser.add_argument('--mailpassword', help='Mail password (prompts if blank)')
-    parser.add_argument('--dbuser',       help='Database username', default='mailbot')
-    parser.add_argument('--dbpassword',   help='Database passsword (prompts if blank)')
-    parser.add_argument('--dbname',       help='Database name', default = 'asterisk')
-    parser.add_argument('--mailserver',   help='IMAP server', default = 'mail.lcn.com')
-    parser.add_argument('address',        help='E-mail address')
-    parser.add_argument('dbserver',       help='Database server IP address/hostname')
+
+    dbgrp = parser.add_argument_group('DB', 'Database options')
+    dbgrp.add_argument('--dbuser',       help='Database username', default='mailbot')
+    dbgrp.add_argument('--dbpassword',   help='Database passsword (prompts if blank)')
+    dbgrp.add_argument('--dbname',       help='Database name', default = 'asterisk')
+    dbgrp.add_argument('dbserver',       help='Database server IP address/hostname')
 
     return parser.parse_args()
 
@@ -143,9 +149,9 @@ def GetMessages(args):
         else:
             logging.error('Connection refused. Broken firewall/proxy? Call Reece!: {}'.format(serr))
     else:
-        logging.debug('Connecting as {} to {}'.format(args.address, args.mailserver))
+        logging.debug('Connecting as {} to {}'.format(args.mailaddress, args.mailserver))
         try:
-            mail.login(args.address, args.mailpassword)
+            mail.login(args.mailaddress, args.mailpassword)
         except imaplib.IMAP4.error as e:
             logging.error("{}".format(str(e)))
             if re.search('AUTHENTICATIONFAILED', str(e)):
@@ -153,7 +159,7 @@ def GetMessages(args):
                               StarPass(args.mailpassword)))
             return
 
-        mail.select(args.folder) # connect to inbox.
+        mail.select(args.mailfolder) # connect to inbox.
 
         messages = []
         try:
@@ -240,7 +246,6 @@ def ProcessMessage(message, cursor):
     except AttributeError:
         payload = '*** NO MESSAGE CONTENT ***' 
 
-    sql = GenerateVicidialEmailListSQL(message, lead_id, group)    
     try:
         cursor.execute("""insert into `vicidial_email_list` (
                 `lead_id`, `protocol`, `email_date`, `email_to`, 
