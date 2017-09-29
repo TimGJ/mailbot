@@ -12,6 +12,7 @@ Doesn't yet deal with attachments.
 """
 
 import logging
+import logging.handlers
 import argparse
 import imaplib
 import email
@@ -42,10 +43,10 @@ class Message:
             elif self.message['Content-Type'].startswith('multipart/mixed;'):
                 self.multipart = True
             else:
-                logging.warning('Message UID={} has unknown content type {}'.format(
+                logger.warning('Message UID={} has unknown content type {}'.format(
                         self.imapuid, self.message['Content-Type']))
         except KeyError:
-            logging.warning('Message UID={} has no content type'.format(self.imapuid))
+            logger.warning('Message UID={} has no content type'.format(self.imapuid))
             
         if type(self.message['To']) is str:
             todetails = email.utils.getaddresses(self.message['To'].split(","))[0]
@@ -85,7 +86,7 @@ def StarPass(p):
     "s*******h"
     """
     if type(p) is not str:
-        logging.warning("Can't interpret password {}".format(p))
+        logger.warning("Can't interpret password {}".format(p))
         return
     elif len(p) < 3:
         return p
@@ -117,7 +118,8 @@ def ProcessArguments():
     mexgrp.add_argument('--checkall',     help='Process all mails rather than just new ones', action='store_true')
     mexgrp.add_argument('--interval',     help='Seconds between e-mail checks (only runs once if ommitted)', type=int)
     parser.add_argument('--verbose',      help='Verbose output', action='store_true')
-    parser.add_argument('--logfile',      help='Name of logfile (logs to console otherwise)')
+    parser.add_argument('--logfile',      help='Log file name')
+    parser.add_argument('--rotate',       help='Rotate log file', action='store_true')
 
     dbgrp = parser.add_argument_group('DB', 'Database options')
     dbgrp.add_argument('--dbuser',       help='Database username', default='mailbot')
@@ -125,7 +127,35 @@ def ProcessArguments():
     dbgrp.add_argument('--dbname',       help='Database name', default = 'asterisk')
     dbgrp.add_argument('dbserver',       help='Database server IP address/hostname')
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.rotate and not args.logfile:
+        parser.error('--rotate option can only be used with --logfile')
+    return args
+
+def SetupLogger(maxBytes=1<<20, backupCount=5, **args):
+    """
+    Sets up logging. Moved to a separate function for readability. Suppose I should really convert it
+    to kwargs format at some stage...
+    :param args: **kwargs
+    :param maxBytes: Maximum size of logfile in B
+    :param backupCount: Maximum number of logfiles to retain
+    :return: logger object
+    """
+    logger = logging.getLogger(args['mailaddress'])
+    logger.setLevel(logging.DEBUG if args['verbose'] else logging.INFO)
+    formatter = logging.Formatter(fmt='%(asctime)s:%(name)s:%(message)s')
+    console = logging.StreamHandler(sys.stderr)
+    console.setFormatter(formatter)
+    logger.addHandler(console)
+    if args['logfile']:
+        logfile = logging.handlers.RotatingFileHandler('{}.log'.format(args['logfile']),
+                                maxBytes=maxBytes, backupCount=backupCount)
+        logfile.setFormatter(formatter)
+        logger.addHandler(logfile)
+        if args['rotate']: # Rotate the logfile
+            logfile.doRollover()
+    return logger
 
 def GetMessages(args):
     """
@@ -139,24 +169,24 @@ def GetMessages(args):
     try:
         mail = imaplib.IMAP4_SSL(args.mailserver)
     except imaplib.IMAP4.error as e:
-        logging.error("{}".format(str(e)))
+        logger.error("{}".format(str(e)))
         if re.search('11004|getaddrinfo', str(e)):
-            logging.error('Is host {} reachable?'.format(args.mailserver))
+            logger.error('Is host {} reachable?'.format(args.mailserver))
         return
     except socket_error as serr:
         if serr.errno != errno.ECONNREFUSED:
-            logging.error('Socket error: {}'.format(serr))
+            logger.error('Socket error: {}'.format(serr))
             raise serr
         else:
-            logging.error('Connection refused. Broken firewall/proxy? Call Reece!: {}'.format(serr))
+            logger.error('Connection refused. Broken firewall/proxy? Call Reece!: {}'.format(serr))
     else:
-        logging.debug('Connecting as {} to {}'.format(args.mailaddress, args.mailserver))
+        logger.debug('Connecting as {} to {}'.format(args.mailaddress, args.mailserver))
         try:
             mail.login(args.mailaddress, args.mailpassword)
         except imaplib.IMAP4.error as e:
-            logging.error("{}".format(str(e)))
+            logger.error("{}".format(str(e)))
             if re.search('AUTHENTICATIONFAILED', str(e)):
-                logging.error('Can user {} connect with pasword {}?'.format(args.address,
+                logger.error('Can user {} connect with pasword {}?'.format(args.address,
                               StarPass(args.mailpassword)))
             return
 
@@ -166,20 +196,20 @@ def GetMessages(args):
         try:
             result, uidstring = mail.search(None, "ALL" if args.checkall else "(UNSEEN)")
         except imaplib.IMAP4.error as e:
-            logging.error("{}".format(str(e)))
+            logger.error("{}".format(str(e)))
             if re.search('SEARCH illegal in state AUTH', str(e)):
-                logging.error('Does folder {} exist?'.format(args.folder))
+                logger.error('Does folder {} exist?'.format(args.folder))
             return
 
         if result == 'OK':
             uids = uidstring[0].split()
-            logging.debug("Got {} UIDs".format(len(uids)))
+            logger.debug("Got {} UIDs".format(len(uids)))
             for i, uid in enumerate(uids):
                 result, data = mail.fetch(uid,"(RFC822 BODY[TEXT])")
                 if result == 'OK':
                     messages.append(Message(data, uid))
                 else:
-                    logging.debug("Failed to fetch UID {}".format(uid))
+                    logger.debug("Failed to fetch UID {}".format(uid))
         mail.close()
         return messages
 
@@ -191,21 +221,21 @@ def ProcessMessage(message, cursor):
     Checks to see if the e-mail address already exists in the leads table
     If it does retrives the lead ID, otherwise generates a new one
     """
-    logging.debug("Message from {}".format(message.fromaddress))
+    logger.debug("Message from {}".format(message.fromaddress))
 
     try:    
         cursor.execute("select lead_id, title, first_name, last_name from vicidial_list where email = %s", 
                    (message.fromaddress))
     except pymysql.err.ProgrammingError as e:
-        logging.error('Error: {}'.format(e))
-        logging.error(cursor._last_executed)
+        logger.error('Error: {}'.format(e))
+        logger.error(cursor._last_executed)
     
     result = cursor.fetchone()
     if result:
-        logging.debug('Matched ID {} to {}'.format(result[0], message.fromaddress))
+        logger.debug('Matched ID {} to {}'.format(result[0], message.fromaddress))
         lead_id = result[0]
     else:
-        logging.debug('Couldn''t find leadid for {}'.format(message.fromaddress))
+        logger.debug('Couldn''t find leadid for {}'.format(message.fromaddress))
         # Because we only have 30 characters for each of the first and last names,
         # make a stab at separating the punters name in to first and last parts.
         # Also make sure that any apostrophes in the name - e.g. O'Reilly -
@@ -221,12 +251,12 @@ def ProcessMessage(message, cursor):
             cursor.execute("insert into vicidial_list (email, first_name, last_name) values (%s, %s, %s)",
                            (message.fromaddress, first_name, last_name))
         except pymysql.err.ProgrammingError as e:
-            logging.error('Error: {}'.format(e))
-            logging.error(cursor._last_executed)
+            logger.error('Error: {}'.format(e))
+            logger.error(cursor._last_executed)
 
         cursor.execute('SELECT LAST_INSERT_ID()')
         lead_id = cursor.fetchone()[0]
-        logging.debug('Created leadid {} for {}'.format(lead_id, message.fromaddress))
+        logger.debug('Created leadid {} for {}'.format(lead_id, message.fromaddress))
 
     # Get inbound group based on incoming e-mail maddress.
     
@@ -236,7 +266,7 @@ def ProcessMessage(message, cursor):
     result = cursor.fetchone()
     group = result[0] if result else "Unknown"
 
-    logging.debug('E-mail group for {} is {}'.format(message.toaddress, group))     
+    logger.debug('E-mail group for {} is {}'.format(message.toaddress, group))
     # Now we have a leadid, create a new record in the database for the 
     # e-mail message. We need to populate several fields, some of which
     # may not be present in the message.
@@ -266,8 +296,8 @@ def ProcessMessage(message, cursor):
                 message.message['x-mailer'], message.message['sender-ip'], 
                 payload, "MAILBOT", group, "NEW", "INBOUND"))
     except pymysql.err.ProgrammingError as e:
-        logging.error('Error: {}'.format(e))
-        logging.error(cursor._last_executed)
+        logger.error('Error: {}'.format(e))
+        logger.error(cursor._last_executed)
 
     
 def ProcessMessages(messages, args):
@@ -287,12 +317,12 @@ def ProcessMessages(messages, args):
         cnx = pymysql.connect(host=args.dbserver, user=args.dbuser, 
                               password=args.dbpassword, database=args.dbname)
     except pymysql.err.OperationalError as e:
-        logging.error("MySQL Error: {}".format(str(e)))
+        logger.error("MySQL Error: {}".format(str(e)))
         if re.search('1045|Access denied', str(e)):
-            logging.error('Is password {} correct for {}@{}?'.format(
+            logger.error('Is password {} correct for {}@{}?'.format(
                     StarPass(args.dbpassword), args.dbuser, args.dbserver))
         if re.search('2003|Can''t connect to MySQL server', str(e)):
-            logging.error('Is MySQL reachable at port 3306 on {}?'.format(
+            logger.error('Is MySQL reachable at port 3306 on {}?'.format(
                     args.dbserver))
     else:
         cursor = cnx.cursor()
@@ -305,19 +335,14 @@ def ProcessMessages(messages, args):
 if __name__ == '__main__':
 
     args = ProcessArguments()
-    if args.logfile:
-        logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, filename=args.logfile,l
-                            format='%(asctime)s:%(levelname)s:%(message)s')
-    else:
-        logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, stream=sys.stdout,
-                            format='%(asctime)s:%(levelname)s:%(message)s')
+    logger=SetupLogger(**vars(args))
     repo = git.Repo()
     try:
         ver = repo.git.describe()
     except git.exc.GitCommandError:
         ver = "** NO GIT TAG DEFINED **"
-    logging.info('{} Info: {}'.format(sys.executable, sys.version))
-    logging.info('{} Ver. {}'.format(__file__, ver))
+    logger.info('{} Info: {}'.format(sys.executable, sys.version))
+    logger.info('{} Ver. {}'.format(__file__, ver))
 
     if not args.mailpassword:
         args.mailpassword = getpass.getpass('Mail password: ')
@@ -334,7 +359,7 @@ if __name__ == '__main__':
             if args.interval:
                 time.sleep(args.interval)
             else:
-                logging.info("No repeat interval specified. Exiting")
+                logger.info("No repeat interval specified. Exiting")
                 break
     except KeyboardInterrupt:
-        logging.info('Bye!')
+        logger.info('Bye!')
