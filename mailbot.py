@@ -117,6 +117,7 @@ def ProcessArguments():
     mexgrp.add_argument('--checkall',     help='Process all mails rather than just new ones', action='store_true')
     mexgrp.add_argument('--interval',     help='Seconds between e-mail checks (only runs once if ommitted)', type=int)
     parser.add_argument('--verbose',      help='Verbose output', action='store_true')
+    parser.add_argument('--logfile',      help='Name of logfile (logs to console otherwise)')
 
     dbgrp = parser.add_argument_group('DB', 'Database options')
     dbgrp.add_argument('--dbuser',       help='Database username', default='mailbot')
@@ -304,8 +305,12 @@ def ProcessMessages(messages, args):
 if __name__ == '__main__':
 
     args = ProcessArguments()
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, 
-                        format='%(asctime)s:%(levelname)s:%(message)s')
+    if args.logfile:
+        logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, filename=args.logfile,l
+                            format='%(asctime)s:%(levelname)s:%(message)s')
+    else:
+        logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, stream=sys.stdout,
+                            format='%(asctime)s:%(levelname)s:%(message)s')
     repo = git.Repo()
     try:
         ver = repo.git.describe()
