@@ -186,7 +186,7 @@ def GetMessages(args):
         except imaplib.IMAP4.error as e:
             logger.error("{}".format(str(e)))
             if re.search('AUTHENTICATIONFAILED', str(e)):
-                logger.error('Can user {} connect with pasword {}?'.format(args.address,
+                logger.error('Can user {} connect with pasword {}?'.format(args.mailaddress,
                               StarPass(args.mailpassword)))
             return
 
