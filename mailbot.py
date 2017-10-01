@@ -11,19 +11,33 @@ Doesn't yet deal with attachments.
 
 """
 
-import logging
-import logging.handlers
-import argparse
 import imaplib
 import email
 import time
 import getpass
-import pymysql
 import re
-import git
 import sys
 import errno
 from socket import error as socket_error
+
+try:
+    import pymysql
+except ModuleNotFoundError:
+    print('Error! Requires PyMySQL installing in order to run', file=sys.stderr)
+    sys.exit(1)
+
+try:
+    import git
+except ModuleNotFoundError:
+    print('Error! Requires GitPython installing in order to run', file=sys.stderr)
+    sys.exit(1)
+
+if sys.version_info.major < 3:
+    print('Error! Requires Python 3 in order to run. Found {}'.format(sys.version), file=sys.stderr)
+    sys.exit(1)
+
+
+from SetupEnvironment import *
 
 class Message:
     """
@@ -77,7 +91,40 @@ class Message:
         return "From: {} {} To: {} {} Date: {} Subject: {}".format(
                 self.fromname, self.fromaddress, self.toname, self.toaddress, 
                 self.date, self.subject)
-        
+
+class Mailbot:
+    """
+    Class to hold the details of an instance of the mailbot
+    """
+
+    def __init__(self, jobname, dbhost, dbuser, dbpassword, dbport, dbname, mailhost, mailuser, mailpassword, interval):
+        """
+        :param jobname: Some identifying string used in logger messages
+        :param dbhost:  Database host (e.g. 'merlin' or '10.20.30.40')
+        :param dbuser: Database user (e.g. 'mailbot')
+        :param dbpassword: Datgabase password
+        :param dbport: Datbase port (e.g. 3306)
+        :param dbname: Name of the database (e.g. asterisk)
+        :param mailhost: IMAPS mail server (e.g. mail.lcn.com)
+        :param mailuser: username on mailserver (e.g. tim@xyzzy.com)
+        :param mailpassword: IMAP password (e.g. 'swordfish')
+        :param interval: Interval in seconds betwen runs. Zero means it only runs once.
+        """
+        self.jobname = jobname
+        self.dbhost = dbhost
+        self.dbuser = dbuser
+        self.dbpassword = dbpassword
+        self.dbport = dbport
+        self.dbname = dbname
+        self.mailhost = mailhost
+        self.mailuser = mailuser
+        self.mailpassword = mailpassword
+        try:
+            self.interval = int(interval)
+        except  (TypeError, ValueError) as e:
+            logger.error('{} Interval must be an integer number of seconds: {}'.format(self.jobname, e))
+
+
 
 def StarPass(p):
     """
@@ -93,69 +140,6 @@ def StarPass(p):
     else:
         return p[0] + (len(p)-2)*'*' + p[-1]
 
-def ProcessArguments():
-    """
-    Process the command line arguments returning an argparse namepsace
-    or None if the parse didn't work.
-    """
-    repo = git.Repo()
-    try:
-        ver = repo.git.describe()
-    except git.exc.GitCommandError:
-        ver = None
-    description = 'Connex Mailbot'
-    if ver:
-        description += ' v. {}'.format(ver)
-    parser = argparse.ArgumentParser(description=description)
-
-    emlgrp = parser.add_argument_group('E-mail', 'E-mail collection options')
-    emlgrp.add_argument('--mailfolder',   help='Folder name', default='Inbox')
-    emlgrp.add_argument('--mailpassword', help='Mail password (prompts if blank)')
-    emlgrp.add_argument('--mailserver',   help='IMAP server', default = 'mail.lcn.com')
-    emlgrp.add_argument('mailaddress',    help='E-mail address')
-
-    mexgrp = parser.add_mutually_exclusive_group()
-    mexgrp.add_argument('--checkall',     help='Process all mails rather than just new ones', action='store_true')
-    mexgrp.add_argument('--interval',     help='Seconds between e-mail checks (only runs once if ommitted)', type=int)
-    parser.add_argument('--verbose',      help='Verbose output', action='store_true')
-    parser.add_argument('--logfile',      help='Log file name')
-    parser.add_argument('--rotate',       help='Rotate log file', action='store_true')
-
-    dbgrp = parser.add_argument_group('DB', 'Database options')
-    dbgrp.add_argument('--dbuser',       help='Database username', default='mailbot')
-    dbgrp.add_argument('--dbpassword',   help='Database passsword (prompts if blank)')
-    dbgrp.add_argument('--dbname',       help='Database name', default = 'asterisk')
-    dbgrp.add_argument('dbserver',       help='Database server IP address/hostname')
-
-    args = parser.parse_args()
-
-    if args.rotate and not args.logfile:
-        parser.error('--rotate option can only be used with --logfile')
-    return args
-
-def SetupLogger(maxBytes=1<<20, backupCount=5, **args):
-    """
-    Sets up logging. Moved to a separate function for readability. Suppose I should really convert it
-    to kwargs format at some stage...
-    :param args: **kwargs
-    :param maxBytes: Maximum size of logfile in B
-    :param backupCount: Maximum number of logfiles to retain
-    :return: logger object
-    """
-    logger = logging.getLogger(args['mailaddress'])
-    logger.setLevel(logging.DEBUG if args['verbose'] else logging.INFO)
-    formatter = logging.Formatter(fmt='%(asctime)s:%(name)s:%(message)s')
-    console = logging.StreamHandler(sys.stderr)
-    console.setFormatter(formatter)
-    logger.addHandler(console)
-    if args['logfile']:
-        logfile = logging.handlers.RotatingFileHandler('{}.log'.format(args['logfile']),
-                                maxBytes=maxBytes, backupCount=backupCount)
-        logfile.setFormatter(formatter)
-        logger.addHandler(logfile)
-        if args['rotate']: # Rotate the logfile
-            logfile.doRollover()
-    return logger
 
 def GetMessages(args):
     """
@@ -184,7 +168,7 @@ def GetMessages(args):
         try:
             mail.login(args.mailaddress, args.mailpassword)
         except imaplib.IMAP4.error as e:
-            logger.error("{}".format(str(e)))
+            logger.error("IMAP4 Error! {}".format(str(e)))
             if re.search('AUTHENTICATIONFAILED', str(e)):
                 logger.error('Can user {} connect with pasword {}?'.format(args.mailaddress,
                               StarPass(args.mailpassword)))
@@ -238,15 +222,13 @@ def ProcessMessage(message, cursor):
         logger.debug('Couldn''t find leadid for {}'.format(message.fromaddress))
         # Because we only have 30 characters for each of the first and last names,
         # make a stab at separating the punters name in to first and last parts.
-        # Also make sure that any apostrophes in the name - e.g. O'Reilly -
-        # are doubled as otherwise it would break SQL string parsing.
+
         parts = message.fromname.split()
-        first_name = parts[0].replace("'", "''")
+        first_name = parts[0]
         try:
-            last_name = " ".join(parts[1:]).replace("'", "''")
+            last_name = " ".join(parts[1:])
         except IndexError:
             last_name = "UNKNOWN"
-
         try:
             cursor.execute("insert into vicidial_list (email, first_name, last_name) values (%s, %s, %s)",
                            (message.fromaddress, first_name, last_name))
@@ -278,14 +260,14 @@ def ProcessMessage(message, cursor):
         payload = '*** NO MESSAGE CONTENT ***' 
 
     try:
-        cursor.execute("""insert into `vicidial_email_list` (
-                `lead_id`, `protocol`, `email_date`, `email_to`, 
-                `email_from`, `email_from_name`, `subject`, `mime_type`, 
-                `content_type`, `content_transfer_encoding`, `x_mailer`, 
-                `sender_ip`, `message`, `email_account_id`, `group_id`, 
-                `status`, `direction`) values (%s, %s, %s, %s, 
-                %s, %s, %s, %s, %s, %s,  %s, %s, %s, %s, %s, %s, %s) """
-                ,(lead_id, 
+        cursor.execute("insert into `vicidial_email_list` ("
+                       "`lead_id`, `protocol`, `email_date`, `email_to`, "
+                       "`email_from`, `email_from_name`, `subject`, `mime_type`, "
+                       "`content_type`, `content_transfer_encoding`, `x_mailer`, "
+                       "`sender_ip`, `message`, `email_account_id`, `group_id`, "
+                       "`status`, `direction`) values (%s, %s, %s, %s, "
+                       " %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                       , (lead_id,
                 "IMAP",
                 message.date.strftime('%Y-%m-%d %H:%M:%S'), 
                 message.message['to'], message.fromaddress, 
