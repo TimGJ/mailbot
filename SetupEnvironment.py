@@ -10,6 +10,8 @@ import argparse
 import git
 import sys
 import glob
+import configparser
+import re
 
 def ProcessArguments():
     """
@@ -62,6 +64,31 @@ def ProcessArguments():
 
     return args
 
+def GetSize(input):
+    """
+    Converts string (input) in to a number and multiplies by any suffix appended to it
+    :param input: string
+    :return: float
+    """
+
+
+    multipliers = {'B': 1 << 0, 'K': 1 << 10, 'M': 1 << 20, 'G': 1 << 30, 'T': 1 << 40, 'E': 1 << 50}
+
+    pattern = r'([0-9.]+)([KMGTE])'
+    match = re.match(pattern, input.upper())
+    if match:
+        (radix, suffix) = match.groups()
+        try:
+            return int(float(radix) * multipliers[suffix]))
+        except (ValueError, TypeError) as err:
+            logging.error("Can't interpret {} as a number {}".format(input, err))
+    else:
+        try:
+            return int(input)
+        except (ValueError, TypeError) as err:
+            logging.error("Can't interpret {} as a number {}".format(input, err))
+
+
 def SetupLogger(**args):
     """
     Sets up logging. Moved to a separate function for readability. Suppose I should really convert it
@@ -96,12 +123,13 @@ if __name__ == '__main__':
     # As we might someday want to run this on Windows or some other broken OS
     # which doesn't support file globbing, then glob each of the entries in the list.
     g = []
+    bots = []
     if args.config:
         for f in args.config:
             g += glob.glob(f)
         if g:
-            logger.info('Attempting to read settings from: {}'.format("; ".join(g)))
-        else:
-            logger.error('Could not find any files matching the pattern: {}'.format('; '.join(args.config)))
+            cp = configparser.ConfigParser()
+            cp.read(g)
+
 
 
