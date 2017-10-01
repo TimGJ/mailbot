@@ -242,7 +242,7 @@ class Mailbot:
             lead_id = cursor.fetchone()[0]
             logger.debug('{}: Created leadid {} for {}'.format(self.client, lead_id, message.fromaddress))
 
-        # Get inbound group based on incoming e-mail maddress.
+        # Get inbound group based on incoming e-mail address.
 
         cursor.execute("select group_id from vicidial_inbound_groups where email = %s",
                        (message.toaddress))
