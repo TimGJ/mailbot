@@ -244,8 +244,7 @@ class Mailbot:
 
         # Get inbound group based on incoming e-mail address.
 
-        cursor.execute("select group_id from vicidial_inbound_groups where email = %s",
-                       (message.toaddress))
+        cursor.execute("select group_id from vicidial_inbound_groups where email = %(to)s",{'to': message.toaddress})
 
         result = cursor.fetchone()
         group = result[0] if result else "Unknown"
