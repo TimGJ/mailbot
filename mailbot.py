@@ -43,6 +43,13 @@ class Message:
     Converts a response from the IMAP server in to a Message. Should be
     passed to the constructor as a tuple containing two byte strings. 
     """
+
+    MaxSubjectLength  = 200
+    MaxFromName       =  80
+    MaxFromAddress    =  80
+    MaxToName         =  80
+    MaxToAddress      =  80
+
     def __init__(self, data, uid):
         self.imapuid = str(uid) if uid else None
         self.data = data
@@ -55,15 +62,17 @@ class Message:
                 self.multipart = False
             elif self.message['Content-Type'].startswith('multipart/mixed;'):
                 self.multipart = True
+            elif self.message['Content-Type'].startswith('multipart/alternative;'):
+                self.multipart = True
             else:
                 logger.warning('Message UID={} has unknown content type {}'.format(
-                        self.imapuid, self.message['Content-Type']))
+                        str(self.imapuid), self.message['Content-Type']))
         except KeyError:
             logger.warning('Message UID={} has no content type'.format(self.imapuid))
             
         if type(self.message['To']) is str:
             todetails = email.utils.getaddresses(self.message['To'].split(","))[0]
-            self.toname, self.toaddress = todetails[0], todetails[1]
+            self.toname, self.toaddress = todetails[0][:Message.MaxToName], todetails[1][:Message.MaxToAddress]
         else:
             self.toname = None
             self.toaddress = None
@@ -71,7 +80,7 @@ class Message:
  
         if type(self.message['From']) is str:
             fromdetails = email.utils.getaddresses(self.message['From'].split(","))[0]
-            self.fromname, self.fromaddress = fromdetails[0], fromdetails[1]
+            self.fromname, self.fromaddress = fromdetails[0][:Message.MaxFromName], fromdetails[1][:Message.MaxFromAddress]
         else:
             self.sender = None
             self.errors = True
@@ -84,7 +93,7 @@ class Message:
             self.errors = True
             print("Error parsing date '{}'".format(self.message['Date']))
         
-        self.subject = self.message['Subject'] if self.message['Subject'] else None
+        self.subject = self.message['Subject'][:Message.MaxSubjectLength] if self.message['Subject'] else None
 
     def __repr__(self):
         return "From: {} {} To: {} {} Date: {} Subject: {}".format(
@@ -98,7 +107,7 @@ class Mailbot:
     DefaultMailHost   = 'mail.lcn.com'
     DefaultDBUser     = 'mailbot'
     DefaultDBName     = 'asterisk'
-    DefaultInterval   = 60
+    DefaultInterval   =  60
     DefaultMailFolder = 'Inbox'
 
     def __init__(self, client, cp):
@@ -122,6 +131,8 @@ class Mailbot:
             self.interval = int(cp.get('interval', Mailbot.DefaultInterval))
         except  (TypeError, ValueError) as e:
             logger.error('{}: Interval must be an integer number of seconds: {}'.format(self.client, e))
+        self.messages = self.GetMessages()
+        self.ProcessMessages()
 
     def __repr__(self):
         return('[{}] {}/{}:{} -> {}/{}@{}:{}.{}'.format(self.client, self.mailuser, self.StarPass(self.mailpassword),
@@ -172,7 +183,7 @@ class Mailbot:
             except imaplib.IMAP4.error as e:
                 logger.error("{}: IMAP4 Error! {}".format(self.client, str(e)))
                 if re.search('AUTHENTICATIONFAILED', str(e)):
-                    logger.error('{}: Can user {} connect with pasword {}?'.format(self.client, self.mailuser,
+                    logger.error('{}: Can user {} connect with password {}?'.format(self.client, self.mailuser,
                                   self.StarPass(self.mailpassword)))
                 return
 
@@ -256,7 +267,7 @@ class Mailbot:
         # Variable names are those of the corresponding columns
 
         try:
-            payload = message.message.get_payload()[0].get_payload().replace('"','""')
+            payload = message.message.get_payload()[0].get_payload()
         except AttributeError:
             payload = '*** NO MESSAGE CONTENT ***'
 
@@ -269,21 +280,22 @@ class Mailbot:
                            "`status`, `direction`) values (%s, %s, %s, %s, "
                            " %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                            , (lead_id,
-                    "IMAP",
-                    message.date.strftime('%Y-%m-%d %H:%M:%S'),
-                    message.message['to'], message.fromaddress,
-                    message.fromname, message.subject,
-                    message.message['mime-type'],
-                    message.message['content-type'].split(';')[0],
-                    message.message['content-transfer-encoding'],
-                    message.message['x-mailer'], message.message['sender-ip'],
-                    payload, "MAILBOT", group, "NEW", "INBOUND"))
+                                "IMAP",
+                                message.date.strftime('%Y-%m-%d %H:%M:%S'),
+                                message.message['to'], message.fromaddress,
+                                message.fromname, message.subject,
+                                message.message['mime-type'],
+                                message.message['content-type'].split(';')[0],
+                                message.message['content-transfer-encoding'],
+                                message.message['x-mailer'], message.message['sender-ip'],
+
+                                payload, "MAILBOT", group, "NEW", "INBOUND"))
         except pymysql.err.ProgrammingError as e:
             logger.error('Error: {}'.format(e))
             logger.error(cursor._last_executed)
 
 
-    def ProcessMessages(self, messages, args):
+    def ProcessMessages(self):
         """
         Adds details of the downloaded mail messages.
 
@@ -297,19 +309,19 @@ class Mailbot:
         message...
         """
         try:
-            cnx = pymysql.connect(host=args.dbserver, user=args.dbuser,
-                                  password=args.dbpassword, database=args.dbname)
+            cnx = pymysql.connect(host=self.dbhost, user=self.dbuser,
+                                  password=self.dbpassword, database=self.dbname)
         except pymysql.err.OperationalError as e:
             logger.error("{}: MySQL Error: {}".format(self.client, str(e)))
             if re.search('1045|Access denied', str(e)):
                 logger.error('{}: Is password {} correct for {}@{}?'.format(
                         self.client, self.StarPass(self.dbpassword), self.dbuser, self.dbhost))
-            if re.search('2003|Can''t connect to MySQL server', str(e)):
+            if re.search('2003|Can\'t connect to MySQL server', str(e)):
                 logger.error("{}: Is MySQL reachable at port 3306 on {}?".format(
                         self.client, self.dbhost))
         else:
             cursor = cnx.cursor()
-            for message in messages:
+            for message in self.messages:
                 self.ProcessMessage(message, cursor)
                 cnx.commit()
             cursor.close()
@@ -330,6 +342,16 @@ if __name__ == '__main__':
             except KeyError:
                 logging.error('Can\'t find [LOGGING] section in config files: {}'.format('; '.join(r)))
             else:
+                logger.debug('Python: {}'.format(sys.executable))
+                logger.debug('Information: {}'.format(sys.version))
+                repo = git.Repo()
+                try:
+                    ver = repo.git.describe()
+                except git.exc.GitCommandError:
+                    logger.debug('No git version available')
+                else:
+                    logger.info('{} Ver. {}'.format(__file__, ver))
+
                 clients = [Mailbot(n, cp[n]) for n in sorted(list(set(cp.sections()) - set(['LOGGING'])))]
                 if len(clients):
                     logger.debug('Read config for {} clients: {}'.format(len(clients), "; ".join([c.client for c in clients])))
@@ -338,13 +360,3 @@ if __name__ == '__main__':
     else:
         logging.error('Can\'t find configuration file(s): {}'.format('; '.join(args.config)))
 
-    logger.debug('Python: {}'.format(sys.executable))
-    logger.debug('Information: {}'.format(sys.version))
-
-    repo = git.Repo()
-    try:
-        ver = repo.git.describe()
-    except git.exc.GitCommandError:
-        logger.debug('No git version available')
-    else:
-        logger.info('{} Ver. {}'.format(__file__, ver))
