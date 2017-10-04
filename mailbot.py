@@ -16,6 +16,10 @@ import email
 import configparser
 import glob
 import sys
+import os
+import time
+import signal
+import multiprocessing
 import errno
 from socket import error as socket_error
 
@@ -131,8 +135,7 @@ class Mailbot:
             self.interval = int(cp.get('interval', Mailbot.DefaultInterval))
         except  (TypeError, ValueError) as e:
             logger.error('{}: Interval must be an integer number of seconds: {}'.format(self.client, e))
-        self.messages = self.GetMessages()
-        self.ProcessMessages()
+
 
     def __repr__(self):
         return('[{}] {}/{}:{} -> {}/{}@{}:{}.{}'.format(self.client, self.mailuser, self.StarPass(self.mailpassword),
@@ -308,24 +311,48 @@ class Mailbot:
         in the same session from the same user we commit after processing each
         message...
         """
-        try:
-            cnx = pymysql.connect(host=self.dbhost, user=self.dbuser,
-                                  password=self.dbpassword, database=self.dbname)
-        except pymysql.err.OperationalError as e:
-            logger.error("{}: MySQL Error: {}".format(self.client, str(e)))
-            if re.search('1045|Access denied', str(e)):
-                logger.error('{}: Is password {} correct for {}@{}?'.format(
-                        self.client, self.StarPass(self.dbpassword), self.dbuser, self.dbhost))
-            if re.search('2003|Can\'t connect to MySQL server', str(e)):
-                logger.error("{}: Is MySQL reachable at port 3306 on {}?".format(
-                        self.client, self.dbhost))
-        else:
-            cursor = cnx.cursor()
-            for message in self.messages:
-                self.ProcessMessage(message, cursor)
-                cnx.commit()
-            cursor.close()
-            cnx.close()
+        logger.debug('{}: mailbot client instance started PID={} PPID={}'.format(self.client, os.getpid(), os.getppid()))
+        while True:
+            try:
+                cnx = pymysql.connect(host=self.dbhost, user=self.dbuser,
+                                      password=self.dbpassword, database=self.dbname)
+            except pymysql.err.OperationalError as e:
+                logger.error("{}: MySQL Error: {}".format(self.client, str(e)))
+                if re.search('1045|Access denied', str(e)):
+                    logger.error('{}: Is password {} correct for {}@{}?'.format(
+                            self.client, self.StarPass(self.dbpassword), self.dbuser, self.dbhost))
+                if re.search('2003|Can\'t connect to MySQL server', str(e)):
+                    logger.error("{}: Is MySQL reachable at port 3306 on {}?".format(
+                            self.client, self.dbhost))
+            else:
+                logger.debug('{}: Connected to DB as {}@{}:{}'.format(self.client, self.dbuser, self.dbhost, self.dbname))
+                cursor = cnx.cursor()
+                self.messages = self.GetMessages()
+                for message in self.messages:
+                    self.ProcessMessage(message, cursor)
+                    cnx.commit()
+                cursor.close()
+                cnx.close()
+                time.sleep(self.interval)
+            finally:
+                logger.debug('{}: mailbot instance terminating'.format(self.client))
+
+
+def InitializeWorker():
+    """
+    Simple function to ensure subprocesses don't catch KeyboardInterrupt and can
+    therefore be terminated gracefully...
+    :return:None
+    """
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+def Work(n):
+    """
+    Function to kick worker process off
+    :param n: Mailbot object
+    :return:
+    """
+    n.ProcessMessages()
 
 if __name__ == '__main__':
 
@@ -351,10 +378,18 @@ if __name__ == '__main__':
                     logger.debug('No git version available')
                 else:
                     logger.info('{} Ver. {}'.format(__file__, ver))
-
+                # Get the list of clients from the config and create a Mailbot object for each
                 clients = [Mailbot(n, cp[n]) for n in sorted(list(set(cp.sections()) - set(['LOGGING'])))]
                 if len(clients):
-                    logger.debug('Read config for {} clients: {}'.format(len(clients), "; ".join([c.client for c in clients])))
+                    logger.info('Creating pool of {} workers'.format(len(clients)))
+                    try:
+                        with multiprocessing.Pool(len(clients), InitializeWorker) as pool:
+                            pool.map(Work, clients)
+                    except KeyboardInterrupt as e:
+                        print('Terminated by user. Cleaning up. {}'.format(str(e)))
+                        for p in multiprocessing.active_children():
+                            p.terminate()
+                        pool.terminate()
                 else:
                     logger.error('No client configurations found in config files.')
     else:
