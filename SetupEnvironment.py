@@ -90,11 +90,17 @@ def SetupLogger(cnf):
     except (ValueError):
         logging.error('BackupCount value must be an integer. Got {}. Using {} instead.'.format(cnf.get('BackupCount'), DefaultBackupCount))
         backupcount = DefaultBackupCount
-    logfile = logging.handlers.RotatingFileHandler(cnf.get('LogFile', 'mailbot.log'), maxBytes=maxbytes, backupCount=backupcount)
-    logfile.setFormatter(formatter)
-    logger.addHandler(logfile)
-    if cnf.getboolean('RotateOnStartup', False): # Rotate the logfile
-        logfile.doRollover()
+
+    logfilename = cnf.get('LogFile', 'mailbot.log')
+    try:
+        logfile = logging.handlers.RotatingFileHandler(logfilename, maxBytes=maxbytes, backupCount=backupcount)
+    except (FileNotFoundError, PermissionError) as e:
+        logging.error("Can't open {}: {}".format(logfilename, e))
+    else:
+        logfile.setFormatter(formatter)
+        logger.addHandler(logfile)
+        if cnf.getboolean('RotateOnStartup', False): # Rotate the logfile
+            logfile.doRollover()
     return logger
 
 if __name__ == '__main__':
