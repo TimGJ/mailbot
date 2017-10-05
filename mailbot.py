@@ -172,13 +172,15 @@ class Mailbot:
             logger.error("{}: {}".format(self.client, str(e)))
             if re.search('11004|getaddrinfo', str(e)):
                 logger.error('{}: Is host {} reachable?'.format(self.client, self.mailhost))
-            return
-        except socket_error as serr:
-            if serr.errno != errno.ECONNREFUSED:
-                logger.error('{}: Socket error: {}'.format(self.client, serr))
-                raise serr
+            return []
+        except socket_error as e:
+            if e.errno == errno.ECONNREFUSED:
+                logger.error('{}: Connection refused. Broken firewall/proxy?: {}'.format(self.client, e))
+            elif e.errno == errno.ENETUNREACH:
+                logger.error('{}: Network unreachable. Disconnected?: {}'.format(self.client, e))
             else:
-                logger.error('{}: Connection refused. Broken firewall/proxy?: {}'.format(self.client, serr))
+                logger.error('{}: Socket error: {}'.format(self.client, e))
+            return []
         else:
             logger.debug('{}: Connecting as {} to {}'.format(self.client, self.mailuser, self.mailhost))
             try:
@@ -188,7 +190,7 @@ class Mailbot:
                 if re.search('AUTHENTICATIONFAILED', str(e)):
                     logger.error('{}: Can user {} connect with password {}?'.format(self.client, self.mailuser,
                                   self.StarPass(self.mailpassword)))
-                return
+                return []
 
             mail.select(self.mailfolder) # connect to inbox.
 
@@ -199,7 +201,7 @@ class Mailbot:
                 logger.error("{}: {}".format(self.client, str(e)))
                 if re.search('SEARCH illegal in state AUTH', str(e)):
                     logger.error('{}: Does folder {} exist?'.format(self.client, self.mailfolder))
-                return
+                return []
 
             if result == 'OK':
                 uids = uidstring[0].split()
@@ -319,7 +321,7 @@ class Mailbot:
             except pymysql.err.OperationalError as e:
                 logger.error("{}: MySQL Error: {}".format(self.client, str(e)))
                 if re.search('1045|Access denied', str(e)):
-                    logger.error('{}: Is password {} correct for {}@{}?'.format(
+                    logger.error('{}: Are password {} and privileges correct for {}@{}?'.format(
                             self.client, self.StarPass(self.dbpassword), self.dbuser, self.dbhost))
                 if re.search('2003|Can\'t connect to MySQL server', str(e)):
                     logger.error("{}: Is MySQL reachable at port 3306 on {}?".format(
@@ -333,9 +335,8 @@ class Mailbot:
                     cnx.commit()
                 cursor.close()
                 cnx.close()
-                time.sleep(self.interval)
             finally:
-                logger.debug('{}: mailbot instance terminating'.format(self.client))
+                time.sleep(self.interval)
 
 
 def InitializeWorker():
