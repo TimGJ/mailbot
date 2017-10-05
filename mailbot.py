@@ -358,13 +358,16 @@ def Work(n):
 if __name__ == '__main__':
 
     args = ProcessArguments()
-    if args.config:
-        g = []
-        for f in args.config:
-            g += [h for h in glob.glob(f)]
-        if g:
-            cp = configparser.ConfigParser()
+    g = []
+    for f in args.config:
+        g += [h for h in glob.glob(f)]
+    if g:
+        cp = configparser.ConfigParser()
+        try:
             r = cp.read(g)
+        except configparser.MissingSectionHeaderError as e:
+            logging.error("Can't find any configuration information: {}".format(e))
+        else:
             try:
                 logger = SetupLogger(cp['LOGGING'])
             except KeyError:
@@ -394,5 +397,5 @@ if __name__ == '__main__':
                 else:
                     logger.error('No client configurations found in config files.')
     else:
-        logging.error('Can\'t find configuration file(s): {}'.format('; '.join(args.config)))
+        logging.critical("Can't find any valid config files in {}".format("; ".join(args.config)))
 
