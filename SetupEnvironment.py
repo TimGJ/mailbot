@@ -25,7 +25,7 @@ def ProcessArguments():
     if ver:
         description += ' v. {}'.format(ver)
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument('--config', help='Configuration file', nargs='+', default = 'mailbot.conf')
+    parser.add_argument('config', help='Configuration file', nargs='+', default = 'mailbot.conf')
     args = parser.parse_args()
     return args
 
